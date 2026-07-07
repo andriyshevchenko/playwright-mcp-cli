@@ -1,0 +1,35 @@
+{
+  "name": "playwright-mcp-cli",
+  "version": "0.1.0",
+  "description": "Stateless CLI wrapper around a Playwright MCP HTTP daemon.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Andriy Shevchenko",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andriyshevchenko/playwright-mcp-cli.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "pw": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

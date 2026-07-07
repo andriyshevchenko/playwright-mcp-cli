@@ -1,0 +1,100 @@
+name: Publish to NPM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version bump type (patch | minor | major) or an explicit version (e.g. 1.2.3)"
+        required: true
+        default: patch
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Fetch full history so `npm version` can commit & tag
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # For push-to-main: only publish if local version > npm version
+      - name: Check if version needs publishing
+        id: version_check
+        if: github.event_name == 'push'
+        run: |
+          LOCAL_VERSION=$(node -p "require('./package.json').version")
+          NPM_VERSION=$(npm view playwright-mcp-cli version 2>/dev/null || echo "0.0.0")
+          echo "local=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "npm=$NPM_VERSION" >> "$GITHUB_OUTPUT"
+          IS_NEWER=$(node -e "
+            const [a,b] = ['$LOCAL_VERSION','$NPM_VERSION'].map(v=>v.split('.').map(Number));
+            process.stdout.write(a[0]>b[0]||(a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>b[2])))?'true':'false');
+          ")
+          if [ "$IS_NEWER" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Publishing $LOCAL_VERSION (npm has $NPM_VERSION)."
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Version $LOCAL_VERSION <= $NPM_VERSION on npm — skipping publish."
+          fi
+
+      - name: Publish to NPM (auto on push)
+        if: github.event_name == 'push' && steps.version_check.outputs.skip != 'true'
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_ACCESS_TOKEN }}
+
+      # For manual dispatch: bump version, tag, then publish
+      - name: Validate version input
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -e
+          VERSION="${{ github.event.inputs.version }}"
+          if [ "$VERSION" = "patch" ] || [ "$VERSION" = "minor" ] || [ "$VERSION" = "major" ]; then
+            exit 0
+          fi
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            exit 0
+          fi
+          echo "Error: Invalid version input '$VERSION'. Expected 'patch', 'minor', 'major', or a semantic version like '1.2.3'." >&2
+          exit 1
+
+      - name: Bump version
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          npm version '${{ github.event.inputs.version }}' --message "chore: release v%s [skip ci]"
+
+      - name: Push version commit and tag
+        if: github.event_name == 'workflow_dispatch'
+        run: git push --follow-tags
+
+      - name: Publish to NPM (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_ACCESS_TOKEN }}
