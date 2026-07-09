@@ -2,6 +2,14 @@ import { describe, it, expect, vi } from "vitest";
 import { run, type RunDeps } from "../src/cli.js";
 import type { ConnectedClient } from "../src/mcp.js";
 import type { ToolResult } from "../src/render.js";
+import type { Vault } from "../src/vault.js";
+
+const emptyVault: Vault = {
+  getSecretByTitle: async () => "",
+  resolveProfile: async () => ({}),
+  listSecrets: async () => [],
+  listProfiles: async () => [],
+};
 
 interface Harness {
   deps: RunDeps;
@@ -46,6 +54,7 @@ function harness(opts: {
     deps: {
       connect,
       env: opts.env ?? {},
+      vault: emptyVault,
       render: {
         stdout: (l) => stdout.push(l),
         stderr: (l) => stderr.push(l),

@@ -25,7 +25,8 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "keytar": "^7.9.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

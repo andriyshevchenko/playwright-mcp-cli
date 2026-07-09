@@ -8,6 +8,13 @@ import { parseCli, CliError } from "./args.js";
 import { resolveEndpoint, DEFAULT_ENDPOINT } from "./endpoint.js";
 import { renderResult, type RenderDeps } from "./render.js";
 import { connect, type ClientFactory } from "./mcp.js";
+import {
+  SECURE_COMMANDS,
+  VAULT_ONLY_COMMANDS,
+  runSecureCommand,
+  runVaultCommand,
+} from "./secure.js";
+import { createKeytarVault, type Vault } from "./vault.js";
 
 export const HELP = `pw — stateless CLI for a Playwright MCP daemon
 
@@ -27,16 +34,29 @@ Global options (reserved — cannot be used as tool argument names):
   --url <url>    MCP endpoint. Also PW_MCP_URL env. Default ${DEFAULT_ENDPOINT}.
   --out <path>   Write image/binary result to this path instead of a temp file.
 
+Secure vault commands (credentials from SecureVault OS keychain — values never shown):
+  pw vault-secrets                 List available secret titles.
+  pw vault-profiles                List auth profiles and their env var mappings.
+  pw secure-fill --secret <title> --selector <css>
+                                   Fill a field with a vault secret.
+  pw secure-type --secret <title> [--selector <css>] [--enter]
+                                   Type a secret keystroke-by-keystroke.
+  pw secure-auth --profile <name> --json '{"steps":[{"selector":"..","envVar":".."}]}'
+                                   Run a multi-step login from a profile.
+  pw redacted-snapshot             Snapshot the page with vault values redacted.
+
 Examples:
   pw list
   pw browser_navigate --json '{"url":"https://example.com"}'
   pw browser_take_screenshot --out shot.png
+  pw secure-fill --secret "NICE_EMAIL" --selector "input[name='loginfmt']"
 `;
 
 export interface RunDeps {
   connect: ClientFactory;
   render: RenderDeps;
   env: Record<string, string | undefined>;
+  vault: Vault;
 }
 
 function errMessage(e: unknown): string {
@@ -60,6 +80,11 @@ export async function run(argv: string[], deps: RunDeps): Promise<number> {
     return 0;
   }
 
+  // Vault-only commands read the OS keychain and need no daemon connection.
+  if (parsed.command.kind === "call" && VAULT_ONLY_COMMANDS.has(parsed.command.toolName)) {
+    return runVaultCommand(parsed.command.toolName, deps.vault, deps.render);
+  }
+
   const endpoint = resolveEndpoint(parsed.global.url, deps.env);
 
   let client;
@@ -71,6 +96,16 @@ export async function run(argv: string[], deps: RunDeps): Promise<number> {
   }
 
   try {
+    if (parsed.command.kind === "call" && SECURE_COMMANDS.has(parsed.command.toolName)) {
+      return await runSecureCommand(
+        parsed.command.toolName,
+        parsed.command.args,
+        client,
+        deps.vault,
+        deps.render,
+      );
+    }
+
     if (parsed.command.kind === "list") {
       const { tools } = await client.listTools();
       for (const tool of tools) {
@@ -101,7 +136,7 @@ function main(): void {
     tmpPath: (ext) => join(tmpdir(), `pw-mcp-${randomUUID()}.${ext}`),
   };
 
-  run(process.argv.slice(2), { connect, render, env: process.env })
+  run(process.argv.slice(2), { connect, render, env: process.env, vault: createKeytarVault() })
     .then((code) => {
       // Set exitCode rather than calling process.exit(), which can truncate
       // async stdout/file writes on large results. Let the event loop drain.
