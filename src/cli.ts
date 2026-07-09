@@ -11,6 +11,8 @@ import { connect, type ClientFactory } from "./mcp.js";
 import {
   SECURE_COMMANDS,
   VAULT_ONLY_COMMANDS,
+  collectVaultValues,
+  redactResult,
   runSecureCommand,
   runVaultCommand,
 } from "./secure.js";
@@ -33,6 +35,9 @@ Arguments:
 Global options (reserved — cannot be used as tool argument names):
   --url <url>    MCP endpoint. Also PW_MCP_URL env. Default ${DEFAULT_ENDPOINT}.
   --out <path>   Write image/binary result to this path instead of a temp file.
+  --safe         Scrub every known vault value from text output (also PW_SAFE_MODE=1).
+                 Use in corporate / personal-account contexts so a raw
+                 browser_snapshot or browser_evaluate can never leak a credential.
 
 Secure vault commands (credentials from SecureVault OS keychain — values never shown):
   pw vault-secrets                 List available secret titles.
@@ -119,7 +124,11 @@ export async function run(argv: string[], deps: RunDeps): Promise<number> {
       name: parsed.command.toolName,
       arguments: parsed.command.args,
     });
-    return renderResult(result, { out: parsed.global.out }, deps.render);
+    // Safe mode: scrub every known vault value from text output so a raw
+    // snapshot/evaluate can never leak a corporate/personal credential.
+    const safe = parsed.global.safe === true || deps.env.PW_SAFE_MODE === "1";
+    const rendered = safe ? redactResult(result, await collectVaultValues(deps.vault)) : result;
+    return renderResult(rendered, { out: parsed.global.out }, deps.render);
   } catch (e) {
     deps.render.stderr(errMessage(e));
     return 1;

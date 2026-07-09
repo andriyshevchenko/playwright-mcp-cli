@@ -1,5 +1,5 @@
 import type { ConnectedClient } from "./mcp.js";
-import type { RenderDeps, ToolResult } from "./render.js";
+import type { ContentBlock, RenderDeps, ToolResult } from "./render.js";
 import type { Vault } from "./vault.js";
 
 /** Local commands that resolve credentials from the vault and drive the browser
@@ -119,6 +119,55 @@ async function redactedSnapshot(
 
 function asString(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
+}
+
+/** Resolve every vault secret value (best-effort; unresolvable secrets are skipped). */
+export async function collectVaultValues(vault: Vault): Promise<string[]> {
+  const summaries = await vault.listSecrets();
+  const values: string[] = [];
+  for (const s of summaries) {
+    try {
+      const v = await vault.getSecretByTitle(s.title);
+      if (v) values.push(v);
+    } catch {
+      /* skip unresolvable secrets */
+    }
+  }
+  return values;
+}
+
+/** Binary payload fields are base64 blobs written to a file, never printed as
+ * text — scrubbing them would corrupt the image/resource without preventing any
+ * leak, so redaction skips them. */
+const BINARY_FIELDS = new Set(["data", "blob"]);
+
+/** Return a copy of `result` with every provided secret value scrubbed from ALL
+ * of its string fields (recursively), except binary payloads. Operates on raw
+ * (unescaped) text so it matches actual vault values. This must cover every path
+ * renderResult can print — text blocks, resource.text, resource.uri, and the
+ * JSON.stringify fallback for unknown block shapes — or a value could still leak.
+ * Used by --safe mode to guard against leaks via raw snapshots/evaluate. */
+export function redactResult(result: ToolResult, values: string[]): ToolResult {
+  const active = values.filter((v) => v.length > 0);
+  if (!result.content || active.length === 0) return result;
+  const scrub = (t: string): string => {
+    let out = t;
+    for (const s of active) out = out.split(s).join("[REDACTED]");
+    return out;
+  };
+  const walk = (v: unknown): unknown => {
+    if (typeof v === "string") return scrub(v);
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === "object") {
+      const o: Record<string, unknown> = {};
+      for (const [k, val] of Object.entries(v)) {
+        o[k] = BINARY_FIELDS.has(k) ? val : walk(val);
+      }
+      return o;
+    }
+    return v;
+  };
+  return { ...result, content: result.content.map((b) => walk(b) as ContentBlock) };
 }
 
 interface AuthStep {
@@ -257,15 +306,7 @@ export async function runSecureCommand(
     }
 
     // redacted-snapshot
-    const summaries = await vault.listSecrets();
-    const values: string[] = [];
-    for (const s of summaries) {
-      try {
-        values.push(await vault.getSecretByTitle(s.title));
-      } catch {
-        /* skip unresolvable secrets */
-      }
-    }
+    const values = await collectVaultValues(vault);
     render.stdout(await redactedSnapshot(client, values));
     return 0;
   } catch (e) {

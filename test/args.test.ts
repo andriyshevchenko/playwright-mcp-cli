@@ -110,4 +110,10 @@ describe("parseCli — reserved global flags", () => {
     expect(global).toEqual({ url: "http://host:1/mcp", out: "shot.png" });
     expect(command).toEqual({ kind: "call", toolName: "t", args: { real: "arg" } });
   });
+
+  it("treats --safe as a boolean global without consuming the next token", () => {
+    const { command, global } = parseCli(["browser_snapshot", "--safe", "--foo", "bar"]);
+    expect(global).toEqual({ safe: true });
+    expect(command).toEqual({ kind: "call", toolName: "browser_snapshot", args: { foo: "bar" } });
+  });
 });

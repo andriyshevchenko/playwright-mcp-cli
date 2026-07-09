@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { run, type RunDeps } from "../src/cli.js";
-import { runSecureCommand, runVaultCommand } from "../src/secure.js";
+import {
+  collectVaultValues,
+  redactResult,
+  runSecureCommand,
+  runVaultCommand,
+} from "../src/secure.js";
 import type { ConnectedClient } from "../src/mcp.js";
 import type { ToolResult } from "../src/render.js";
 import type { Vault } from "../src/vault.js";
@@ -302,5 +307,86 @@ describe("run — secure command routing", () => {
     expect(code).toBe(0);
     expect(connect).toHaveBeenCalledOnce();
     expect(r.calls[0].name).toBe("browser_evaluate");
+  });
+
+  it("--safe scrubs vault values from a raw tool result", async () => {
+    const r = rec({
+      browser_snapshot: {
+        content: [{ type: "text", text: "email field: secret-for-NICE_EMAIL" }],
+      },
+    });
+    const deps: RunDeps = { connect: async () => r.client, env: {}, vault: fakeVault(), render: r.render };
+    const code = await run(["browser_snapshot", "--safe"], deps);
+    expect(code).toBe(0);
+    const out = r.stdout.join("\n");
+    expect(out).not.toContain("secret-for-NICE_EMAIL");
+    expect(out).toContain("[REDACTED]");
+  });
+
+  it("does NOT scrub without --safe (opt-in)", async () => {
+    const r = rec({
+      browser_snapshot: { content: [{ type: "text", text: "secret-for-NICE_EMAIL" }] },
+    });
+    const deps: RunDeps = { connect: async () => r.client, env: {}, vault: fakeVault(), render: r.render };
+    await run(["browser_snapshot"], deps);
+    expect(r.stdout.join("\n")).toContain("secret-for-NICE_EMAIL");
+  });
+
+  it("enables safe mode via PW_SAFE_MODE=1 env", async () => {
+    const r = rec({
+      browser_snapshot: { content: [{ type: "text", text: "secret-for-NICE_EMAIL" }] },
+    });
+    const deps: RunDeps = {
+      connect: async () => r.client,
+      env: { PW_SAFE_MODE: "1" },
+      vault: fakeVault(),
+      render: r.render,
+    };
+    await run(["browser_snapshot"], deps);
+    expect(r.stdout.join("\n")).not.toContain("secret-for-NICE_EMAIL");
+  });
+});
+
+describe("redactResult / collectVaultValues", () => {
+  it("collects every resolvable secret value", async () => {
+    const values = await collectVaultValues(fakeVault());
+    expect(values.sort()).toEqual(["secret-for-NICE_EMAIL", "secret-for-NICE_PASSWORD"]);
+  });
+
+  it("scrubs text and resource.text fields, leaving binary blocks untouched", () => {
+    const out = redactResult(
+      {
+        content: [
+          { type: "text", text: "a secret-for-X b" },
+          { type: "resource", resource: { text: "secret-for-X in resource" } },
+          { type: "image", data: "secret-for-X-lookalike-base64" },
+        ],
+      },
+      ["secret-for-X"],
+    );
+    expect(out.content?.[0].text).toBe("a [REDACTED] b");
+    expect(out.content?.[1].resource?.text).toBe("[REDACTED] in resource");
+    // binary data is not text and must be left as-is
+    expect(out.content?.[2].data).toBe("secret-for-X-lookalike-base64");
+  });
+
+  it("scrubs unknown block fields (the JSON.stringify render fallback) and resource.uri", () => {
+    const out = redactResult(
+      {
+        content: [
+          { type: "data", value: "leaked secret-for-X here", nested: { deep: "secret-for-X" } },
+          { type: "resource", resource: { uri: "https://x/?email=secret-for-X" } },
+        ],
+      },
+      ["secret-for-X"],
+    );
+    expect(out.content?.[0].value).toBe("leaked [REDACTED] here");
+    expect((out.content?.[0].nested as { deep: string }).deep).toBe("[REDACTED]");
+    expect(out.content?.[1].resource?.uri).toBe("https://x/?email=[REDACTED]");
+  });
+
+  it("returns the result unchanged when there are no values", () => {
+    const input = { content: [{ type: "text", text: "nothing to hide" }] };
+    expect(redactResult(input, [])).toBe(input);
   });
 });

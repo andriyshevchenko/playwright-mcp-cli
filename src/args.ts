@@ -8,6 +8,7 @@ export type ParsedCommand =
 export interface GlobalOptions {
   url?: string;
   out?: string;
+  safe?: boolean;
 }
 
 export interface ParsedCli {
@@ -30,6 +31,8 @@ export function parseValue(raw: string): number | boolean | string {
 }
 
 const RESERVED = new Set(["url", "out"]);
+/** Reserved boolean globals: present => true, never consume a following token. */
+const BOOL_RESERVED = new Set(["safe"]);
 
 interface Tokenized {
   positionals: string[];
@@ -70,9 +73,14 @@ function tokenize(argv: string[]): Tokenized {
         continue;
       }
 
+      if (BOOL_RESERVED.has(key)) {
+        global.safe = true;
+        continue;
+      }
+
       if (RESERVED.has(key)) {
         requireValue(hasValue, key);
-        global[key as keyof GlobalOptions] = next as string;
+        (global as Record<string, string>)[key] = next as string;
         i++;
         continue;
       }
