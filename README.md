@@ -16,18 +16,22 @@ npx @playwright/mcp@latest --port 8931 --shared-browser-context
 
 This listens at `http://127.0.0.1:8931/mcp` (the CLI's default endpoint).
 
-## 2. Install & build
+## 2. Install
+
+Install the published package globally so the `pw` command is on your PATH:
+
+```bash
+npm i -g playwright-mcp-cli
+pw help
+```
+
+### Build from source (contributors / fallback)
 
 ```bash
 npm install
 npm run build     # tsc -> dist/
 npm test          # vitest
-```
-
-Link it for local use so the `pw` command is on your PATH:
-
-```bash
-npm link          # exposes `pw`
+npm link          # exposes `pw` from this checkout
 # or run directly:
 node dist/cli.js <args>
 ```
@@ -55,6 +59,7 @@ These are **reserved**, so they can't be used as tool argument names — pass su
 
 - `--url <url>` — MCP endpoint. Also settable via the `PW_MCP_URL` env var. Precedence: `--url` > `PW_MCP_URL` > `http://127.0.0.1:8931/mcp`.
 - `--out <path>` — write an image/binary result to this path instead of a generated temp file.
+- `--safe` — scrub every known vault value from text output (also settable via `PW_SAFE_MODE=1`). Use in corporate / personal-account contexts so a raw `browser_snapshot` or `browser_evaluate` can never leak a credential.
 
 ### Examples
 
@@ -82,3 +87,50 @@ PW_MCP_URL=http://127.0.0.1:9000/mcp pw list
 - Image/binary results are written to a file (temp path, or `--out`), and the saved path is printed.
 - If a tool reports an error, its message goes to stderr and the process exits non-zero.
 - Exit codes: `0` success, `1` error.
+
+## 4. Secure vault commands
+
+The CLI can drive logins using credentials stored in **SecureVault** (backed by the OS keychain via `keytar`). Secret *values* are resolved locally and injected into the page — they are **never** printed to stdout/stderr or echoed in error messages.
+
+```
+pw vault-secrets                 List available secret titles (no values).
+pw vault-profiles                List auth profiles and their env-var → secret mappings.
+pw secure-fill --secret <title> --selector <css>
+                                 Fill a field with a vault secret.
+pw secure-type --secret <title> [--selector <css>] [--enter]
+                                 Type a secret keystroke-by-keystroke; --enter presses Enter after.
+pw secure-auth --profile <name> --json '{"steps":[{"selector":"..","envVar":".."}]}'
+                                 Run a multi-step login from a profile.
+pw redacted-snapshot             Snapshot the page with all vault values replaced by [REDACTED].
+```
+
+`vault-secrets` and `vault-profiles` only read the keychain and need **no** running daemon. The others drive the browser, so the daemon must be up.
+
+### secure-auth steps
+
+Each step in `--json '{"steps":[...]}'` accepts:
+
+- `selector` (required) — CSS selector of the target field.
+- `envVar` (required) — env-var name in the profile that maps to the secret.
+- `action` — `"fill"` (default) or `"type"`.
+- `pressEnterAfter` — press Enter after the step (boolean).
+- `waitMs` — delay after the step, in milliseconds.
+
+Steps whose `envVar` is absent from the profile are skipped (not an error).
+
+### Examples
+
+```bash
+# List what's in the vault (titles only)
+pw vault-secrets
+
+# Fill an email field from the vault
+pw secure-fill --secret "GL_EMAIL" --selector "input[type='email']"
+
+# Type a password into the focused field and submit
+pw secure-type --secret "GL_PASSWORD" --enter
+
+# Safely inspect the page in a corporate context (no credential can leak)
+pw redacted-snapshot
+pw --safe browser_snapshot
+```
