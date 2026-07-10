@@ -9,6 +9,7 @@ export const SECURE_COMMANDS = new Set([
   "vault-profiles",
   "secure-fill",
   "secure-type",
+  "secure-navigate",
   "secure-auth",
   "redacted-snapshot",
 ]);
@@ -98,6 +99,12 @@ async function typeIntoField(
 
 async function pressEnter(client: ConnectedClient): Promise<void> {
   await call(client, "browser_press_key", { key: "Enter" });
+}
+
+/** Navigate to a URL pulled from the vault. The URL never reaches stdout, and if
+ * the daemon echoes it back in an error the value is scrubbed before it surfaces. */
+async function navigateTo(client: ConnectedClient, url: string): Promise<void> {
+  await call(client, "browser_navigate", { url }, url);
 }
 
 /** Snapshot the page, then replace every known vault value with [REDACTED]. */
@@ -303,6 +310,32 @@ export async function runSecureCommand(
         render.stdout(`${step.action === "type" ? "Typed" : "Filled"} "${step.envVar}" -> "${step.selector}" (value hidden)`);
       }
       return 0;
+    }
+
+    if (name === "secure-navigate") {
+      const secret = asString(args.secret);
+      const profile = asString(args.profile);
+      if (secret && profile) {
+        throw new Error("secure-navigate: use --secret OR --profile, not both");
+      }
+      if (secret) {
+        const url = await vault.getSecretByTitle(secret);
+        await navigateTo(client, url);
+        render.stdout(`Navigated to secret "${secret}" (URL hidden)`);
+        return 0;
+      }
+      if (profile) {
+        const envVar = asString(args.envVar) ?? "URL";
+        const resolved = await vault.resolveProfile(profile);
+        const entry = resolved[envVar];
+        if (!entry) {
+          throw new Error(`secure-navigate: "${envVar}" not found in profile "${profile}"`);
+        }
+        await navigateTo(client, entry.value);
+        render.stdout(`Navigated to "${envVar}" from profile "${profile}" (URL hidden)`);
+        return 0;
+      }
+      throw new Error("secure-navigate requires --secret <title> or --profile <name> [--envVar <var>]");
     }
 
     // redacted-snapshot

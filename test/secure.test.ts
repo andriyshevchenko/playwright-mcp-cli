@@ -179,6 +179,112 @@ describe("secure-type", () => {
   });
 });
 
+describe("secure-navigate", () => {
+  it("resolves a --secret URL and navigates without leaking it", async () => {
+    const r = rec();
+    const code = await runSecureCommand(
+      "secure-navigate",
+      { secret: "GL_URL" },
+      r.client,
+      fakeVault({ getSecretByTitle: async () => "https://portal.example.com/secret-path" }),
+      r.render,
+    );
+    expect(code).toBe(0);
+    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0].name).toBe("browser_navigate");
+    expect(r.calls[0].arguments).toEqual({ url: "https://portal.example.com/secret-path" });
+    expect(r.stdout.join("\n")).not.toContain("secret-path");
+    expect(r.stdout[0]).toContain("(URL hidden)");
+  });
+
+  it("resolves a URL from a profile envVar (default URL)", async () => {
+    const r = rec();
+    const code = await runSecureCommand(
+      "secure-navigate",
+      { profile: "GL" },
+      r.client,
+      fakeVault({
+        resolveProfile: async () => ({ URL: { value: "https://secret.example.com", label: "Portal" } }),
+      }),
+      r.render,
+    );
+    expect(code).toBe(0);
+    expect(r.calls[0].arguments).toEqual({ url: "https://secret.example.com" });
+    expect(r.stdout[0]).toContain('from profile "GL"');
+  });
+
+  it("resolves an explicit --envVar override from a profile", async () => {
+    const r = rec();
+    const code = await runSecureCommand(
+      "secure-navigate",
+      { profile: "GL", envVar: "PORTAL" },
+      r.client,
+      fakeVault({
+        resolveProfile: async () => ({ PORTAL: { value: "https://portal.example.com", label: "P" } }),
+      }),
+      r.render,
+    );
+    expect(code).toBe(0);
+    expect(r.calls[0].arguments).toEqual({ url: "https://portal.example.com" });
+    expect(r.stdout[0]).toContain('"PORTAL"');
+  });
+
+  it("errors when both --secret and --profile are given", async () => {
+    const r = rec();
+    const code = await runSecureCommand(
+      "secure-navigate",
+      { secret: "GL_URL", profile: "GL" },
+      r.client,
+      fakeVault(),
+      r.render,
+    );
+    expect(code).toBe(1);
+    expect(r.calls).toHaveLength(0);
+    expect(r.stderr[0]).toContain("not both");
+  });
+
+  it("errors when the profile lacks the requested envVar", async () => {
+    const r = rec();
+    const code = await runSecureCommand(
+      "secure-navigate",
+      { profile: "GL", envVar: "HOME" },
+      r.client,
+      fakeVault({ resolveProfile: async () => ({}) }),
+      r.render,
+    );
+    expect(code).toBe(1);
+    expect(r.calls).toHaveLength(0);
+    expect(r.stderr[0]).toContain("HOME");
+  });
+
+  it("errors when neither --secret nor --profile is given", async () => {
+    const r = rec();
+    const code = await runSecureCommand("secure-navigate", {}, r.client, fakeVault(), r.render);
+    expect(code).toBe(1);
+    expect(r.calls).toHaveLength(0);
+    expect(r.stderr[0]).toContain("--secret");
+  });
+
+  it("redacts the URL if the daemon echoes it back in an error", async () => {
+    const r = rec({
+      browser_navigate: {
+        isError: true,
+        content: [{ type: "text", text: "navigation failed for https://portal.example.com/secret-path" }],
+      },
+    });
+    const code = await runSecureCommand(
+      "secure-navigate",
+      { secret: "GL_URL" },
+      r.client,
+      fakeVault({ getSecretByTitle: async () => "https://portal.example.com/secret-path" }),
+      r.render,
+    );
+    expect(code).toBe(1);
+    expect(r.stderr.join("\n")).not.toContain("secret-path");
+    expect(r.stderr.join("\n")).toContain("[REDACTED]");
+  });
+});
+
 describe("secure-auth", () => {
   it("runs each step, filling/typing resolved values and pressing Enter", async () => {
     const r = rec();

@@ -99,6 +99,9 @@ pw secure-fill --secret <title> --selector <css>
                                  Fill a field with a vault secret.
 pw secure-type --secret <title> [--selector <css>] [--enter]
                                  Type a secret keystroke-by-keystroke; --enter presses Enter after.
+pw secure-navigate --secret <title>
+pw secure-navigate --profile <name> [--envVar <var>]
+                                 Navigate to a URL stored in the vault; the URL is never printed.
 pw secure-auth --profile <name> --json '{"steps":[{"selector":"..","envVar":".."}]}'
                                  Run a multi-step login from a profile.
 pw redacted-snapshot             Snapshot the page with all vault values replaced by [REDACTED].
@@ -118,6 +121,10 @@ Each step in `--json '{"steps":[...]}'` accepts:
 
 Steps whose `envVar` is absent from the profile are skipped (not an error).
 
+### secure-navigate
+
+Treats a URL as a secret: store the target address in SecureVault (e.g. an internal portal with a token or tenant ID in the path) and navigate to it without the URL ever reaching your terminal or model context. Resolve it either directly by secret title (`--secret`) or through a profile mapping (`--profile`, defaulting to the `URL` env-var, override with `--envVar`) — pass one or the other, not both. The resolved value is scrubbed from any daemon error before it surfaces.
+
 ### Examples
 
 ```bash
@@ -129,6 +136,10 @@ pw secure-fill --secret "GL_EMAIL" --selector "input[type='email']"
 
 # Type a password into the focused field and submit
 pw secure-type --secret "GL_PASSWORD" --enter
+
+# Navigate to a URL stored in the vault (address never printed)
+pw secure-navigate --secret "GL_PORTAL_URL"
+pw secure-navigate --profile "GlobalLogic" --envVar "URL"
 
 # Safely inspect the page in a corporate context (no credential can leak)
 pw redacted-snapshot

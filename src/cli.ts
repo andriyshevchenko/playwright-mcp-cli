@@ -46,6 +46,9 @@ Secure vault commands (credentials from SecureVault OS keychain — values never
                                    Fill a field with a vault secret.
   pw secure-type --secret <title> [--selector <css>] [--enter]
                                    Type a secret keystroke-by-keystroke.
+  pw secure-navigate --secret <title>
+  pw secure-navigate --profile <name> [--envVar <var>]
+                                   Navigate to a URL stored in the vault (URL never shown).
   pw secure-auth --profile <name> --json '{"steps":[{"selector":"..","envVar":".."}]}'
                                    Run a multi-step login from a profile.
   pw redacted-snapshot             Snapshot the page with vault values redacted.
