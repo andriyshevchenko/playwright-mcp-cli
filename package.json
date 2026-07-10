@@ -1,6 +1,6 @@
 {
   "name": "playwright-mcp-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Stateless CLI wrapper around a Playwright MCP HTTP daemon.",
   "type": "module",
   "license": "MIT",
