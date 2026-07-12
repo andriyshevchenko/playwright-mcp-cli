@@ -116,4 +116,30 @@ describe("parseCli — reserved global flags", () => {
     expect(global).toEqual({ safe: true });
     expect(command).toEqual({ kind: "call", toolName: "browser_snapshot", args: { foo: "bar" } });
   });
+
+  it("treats --no-keepalive as a boolean global without consuming the next token", () => {
+    const { command, global } = parseCli(["browser_snapshot", "--no-keepalive", "--foo", "bar"]);
+    expect(global).toEqual({ noKeepalive: true });
+    expect(command).toEqual({ kind: "call", toolName: "browser_snapshot", args: { foo: "bar" } });
+  });
+});
+
+describe("parseCli — keepalive commands", () => {
+  it("dispatches keepalive start/stop/status", () => {
+    expect(parseCli(["keepalive", "start"]).command).toEqual({ kind: "keepalive", action: "start" });
+    expect(parseCli(["keepalive", "stop"]).command).toEqual({ kind: "keepalive", action: "stop" });
+    expect(parseCli(["keepalive", "status"]).command).toEqual({ kind: "keepalive", action: "status" });
+  });
+
+  it("defaults keepalive with no action to status", () => {
+    expect(parseCli(["keepalive"]).command).toEqual({ kind: "keepalive", action: "status" });
+  });
+
+  it("rejects an unknown keepalive action", () => {
+    expect(() => parseCli(["keepalive", "bogus"])).toThrow(CliError);
+  });
+
+  it("dispatches the internal __keepalive daemon command", () => {
+    expect(parseCli(["__keepalive"]).command).toEqual({ kind: "keepalive-daemon" });
+  });
 });

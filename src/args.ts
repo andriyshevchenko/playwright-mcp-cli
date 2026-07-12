@@ -3,12 +3,15 @@ export class CliError extends Error {}
 export type ParsedCommand =
   | { kind: "help" }
   | { kind: "list" }
+  | { kind: "keepalive"; action: "start" | "stop" | "status" }
+  | { kind: "keepalive-daemon" }
   | { kind: "call"; toolName: string; args: Record<string, unknown> };
 
 export interface GlobalOptions {
   url?: string;
   out?: string;
   safe?: boolean;
+  noKeepalive?: boolean;
 }
 
 export interface ParsedCli {
@@ -32,7 +35,7 @@ export function parseValue(raw: string): number | boolean | string {
 
 const RESERVED = new Set(["url", "out"]);
 /** Reserved boolean globals: present => true, never consume a following token. */
-const BOOL_RESERVED = new Set(["safe"]);
+const BOOL_RESERVED = new Set(["safe", "no-keepalive"]);
 
 interface Tokenized {
   positionals: string[];
@@ -74,7 +77,8 @@ function tokenize(argv: string[]): Tokenized {
       }
 
       if (BOOL_RESERVED.has(key)) {
-        global.safe = true;
+        if (key === "no-keepalive") global.noKeepalive = true;
+        else global.safe = true;
         continue;
       }
 
@@ -116,6 +120,19 @@ export function parseCli(argv: string[]): ParsedCli {
 
   if (positionals[0] === "list") {
     return { command: { kind: "list" }, global };
+  }
+
+  // Internal: the detached background session-keeper loop.
+  if (positionals[0] === "__keepalive") {
+    return { command: { kind: "keepalive-daemon" }, global };
+  }
+
+  if (positionals[0] === "keepalive") {
+    const action = positionals[1] ?? "status";
+    if (action !== "start" && action !== "stop" && action !== "status") {
+      throw new CliError("keepalive expects: start | stop | status");
+    }
+    return { command: { kind: "keepalive", action }, global };
   }
 
   if (positionals[0] === "call") {

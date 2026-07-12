@@ -22,6 +22,11 @@ interface Harness {
     close: ReturnType<typeof vi.fn>;
   };
   connect: ReturnType<typeof vi.fn>;
+  keepalive: {
+    ensure: ReturnType<typeof vi.fn>;
+    status: ReturnType<typeof vi.fn>;
+    stop: ReturnType<typeof vi.fn>;
+  };
 }
 
 function harness(opts: {
@@ -45,16 +50,24 @@ function harness(opts: {
     return client as unknown as ConnectedClient;
   });
 
+  const keepalive = {
+    ensure: vi.fn(),
+    status: vi.fn(() => ({ running: true, pid: 4242, startedAt: "2026-07-12T00:00:00.000Z" })),
+    stop: vi.fn(() => ({ stopped: true, pid: 4242 })),
+  };
+
   return {
     stdout,
     stderr,
     files,
     client,
     connect,
+    keepalive,
     deps: {
       connect,
       env: opts.env ?? {},
       vault: emptyVault,
+      keepalive,
       render: {
         stdout: (l) => stdout.push(l),
         stderr: (l) => stderr.push(l),
@@ -140,6 +153,59 @@ describe("run — endpoint resolution precedence", () => {
     const h = harness({ tools: [], env: {} });
     await run(["list"], h.deps);
     expect(h.connect).toHaveBeenCalledWith("http://127.0.0.1:8931/mcp");
+  });
+});
+
+describe("run — keepalive", () => {
+  it("auto-starts the keeper for a tool call", async () => {
+    const h = harness({ callResult: { content: [{ type: "text", text: "ok" }] } });
+    await run(["browser_navigate", "--url", "http://host/mcp"], h.deps);
+    expect(h.keepalive.ensure).toHaveBeenCalledWith("http://host/mcp");
+  });
+
+  it("does NOT auto-start the keeper for list", async () => {
+    const h = harness({ tools: [] });
+    await run(["list"], h.deps);
+    expect(h.keepalive.ensure).not.toHaveBeenCalled();
+  });
+
+  it("skips auto-start when --no-keepalive is passed", async () => {
+    const h = harness({ callResult: { content: [] } });
+    await run(["browser_navigate", "--no-keepalive"], h.deps);
+    expect(h.keepalive.ensure).not.toHaveBeenCalled();
+  });
+
+  it("skips auto-start when PW_NO_KEEPALIVE=1", async () => {
+    const h = harness({ callResult: { content: [] }, env: { PW_NO_KEEPALIVE: "1" } });
+    await run(["browser_navigate"], h.deps);
+    expect(h.keepalive.ensure).not.toHaveBeenCalled();
+  });
+
+  it("a keeper failure never fails the actual call", async () => {
+    const h = harness({ callResult: { content: [{ type: "text", text: "ok" }] } });
+    h.keepalive.ensure.mockImplementationOnce(() => {
+      throw new Error("spawn failed");
+    });
+    const code = await run(["browser_navigate"], h.deps);
+    expect(code).toBe(0);
+    expect(h.stdout).toEqual(["ok"]);
+  });
+
+  it("keepalive status reports the running keeper without connecting", async () => {
+    const h = harness({});
+    const code = await run(["keepalive", "status"], h.deps);
+    expect(code).toBe(0);
+    expect(h.connect).not.toHaveBeenCalled();
+    expect(h.keepalive.status).toHaveBeenCalledWith("http://127.0.0.1:8931/mcp");
+    expect(h.stdout[0]).toContain("keepalive running");
+  });
+
+  it("keepalive stop stops the keeper", async () => {
+    const h = harness({});
+    const code = await run(["keepalive", "stop"], h.deps);
+    expect(code).toBe(0);
+    expect(h.keepalive.stop).toHaveBeenCalledWith("http://127.0.0.1:8931/mcp");
+    expect(h.stdout[0]).toContain("keepalive stopped");
   });
 });
 

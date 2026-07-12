@@ -8,6 +8,7 @@ import { parseCli, CliError } from "./args.js";
 import { resolveEndpoint, DEFAULT_ENDPOINT } from "./endpoint.js";
 import { renderResult, type RenderDeps } from "./render.js";
 import { connect, type ClientFactory } from "./mcp.js";
+import { ensureKeeper, keeperStatus, runKeeper, stopKeeper } from "./keepalive.js";
 import {
   SECURE_COMMANDS,
   VAULT_ONLY_COMMANDS,
@@ -24,6 +25,7 @@ Usage:
   pw list                          List available tools.
   pw call <tool> [--key value ...] Call a tool with named arguments.
   pw <tool> [--key value ...]      Shorthand for \`pw call <tool>\`.
+  pw keepalive start|stop|status   Manage the background session-keeper.
   pw help | --help | -h            Show this help.
 
 Arguments:
@@ -38,6 +40,10 @@ Global options (reserved — cannot be used as tool argument names):
   --safe         Scrub every known vault value from text output (also PW_SAFE_MODE=1).
                  Use in corporate / personal-account contexts so a raw
                  browser_snapshot or browser_evaluate can never leak a credential.
+  --no-keepalive Do not auto-start the background session-keeper for this call
+                 (also PW_NO_KEEPALIVE=1). The keeper holds one MCP session open
+                 so the daemon's page/login state survives between \`pw\` calls
+                 instead of resetting to about:blank.
 
 Secure vault commands (credentials from SecureVault OS keychain — values never shown):
   pw vault-secrets                 List available secret titles.
@@ -60,11 +66,27 @@ Examples:
   pw secure-fill --secret "NICE_EMAIL" --selector "input[name='loginfmt']"
 `;
 
+export interface KeepaliveDeps {
+  ensure(endpoint: string): void;
+  status(endpoint: string): { running: boolean; pid?: number; startedAt?: string };
+  stop(endpoint: string): { stopped: boolean; pid?: number };
+}
+
 export interface RunDeps {
   connect: ClientFactory;
   render: RenderDeps;
   env: Record<string, string | undefined>;
   vault: Vault;
+  keepalive?: KeepaliveDeps;
+}
+
+/** Real keeper wiring, bound to this CLI's own entry script for spawning. */
+export function defaultKeepalive(selfScript: string): KeepaliveDeps {
+  return {
+    ensure: (endpoint) => ensureKeeper(endpoint, selfScript),
+    status: keeperStatus,
+    stop: stopKeeper,
+  };
 }
 
 function errMessage(e: unknown): string {
@@ -88,12 +110,36 @@ export async function run(argv: string[], deps: RunDeps): Promise<number> {
     return 0;
   }
 
+  const endpoint = resolveEndpoint(parsed.global.url, deps.env);
+
+  // Internal: become the long-lived background session-keeper (never returns).
+  if (parsed.command.kind === "keepalive-daemon") {
+    await runKeeper(endpoint);
+    return 0;
+  }
+
+  const keepalive = deps.keepalive ?? defaultKeepalive(process.argv[1] ?? "");
+
+  if (parsed.command.kind === "keepalive") {
+    return runKeepaliveCommand(parsed.command.action, endpoint, keepalive, deps.render);
+  }
+
   // Vault-only commands read the OS keychain and need no daemon connection.
   if (parsed.command.kind === "call" && VAULT_ONLY_COMMANDS.has(parsed.command.toolName)) {
     return runVaultCommand(parsed.command.toolName, deps.vault, deps.render);
   }
 
-  const endpoint = resolveEndpoint(parsed.global.url, deps.env);
+  // Keep one MCP session permanently connected so the daemon never tears the
+  // browser down between stateless invocations (upstream closes the browser
+  // when its client refcount hits zero → page resets to about:blank).
+  const optedOut = parsed.global.noKeepalive === true || deps.env.PW_NO_KEEPALIVE === "1";
+  if (!optedOut && parsed.command.kind === "call") {
+    try {
+      keepalive.ensure(endpoint);
+    } catch {
+      /* best-effort: never fail a real call because the keeper couldn't start */
+    }
+  }
 
   let client;
   try {
@@ -140,6 +186,34 @@ export async function run(argv: string[], deps: RunDeps): Promise<number> {
   }
 }
 
+function runKeepaliveCommand(
+  action: "start" | "stop" | "status",
+  endpoint: string,
+  keepalive: KeepaliveDeps,
+  render: RenderDeps,
+): number {
+  if (action === "start") {
+    keepalive.ensure(endpoint);
+    const s = keepalive.status(endpoint);
+    render.stdout(
+      s.running ? `keepalive running for ${endpoint} (pid ${s.pid})` : "keepalive starting…",
+    );
+    return 0;
+  }
+  if (action === "stop") {
+    const r = keepalive.stop(endpoint);
+    render.stdout(r.stopped ? `keepalive stopped (pid ${r.pid})` : "keepalive not running");
+    return 0;
+  }
+  const s = keepalive.status(endpoint);
+  render.stdout(
+    s.running
+      ? `keepalive running for ${endpoint} (pid ${s.pid}, since ${s.startedAt})`
+      : "keepalive not running",
+  );
+  return 0;
+}
+
 function main(): void {
   const render: RenderDeps = {
     stdout: (line) => process.stdout.write(line + "\n"),
@@ -148,7 +222,13 @@ function main(): void {
     tmpPath: (ext) => join(tmpdir(), `pw-mcp-${randomUUID()}.${ext}`),
   };
 
-  run(process.argv.slice(2), { connect, render, env: process.env, vault: createKeytarVault() })
+  run(process.argv.slice(2), {
+    connect,
+    render,
+    env: process.env,
+    vault: createKeytarVault(),
+    keepalive: defaultKeepalive(process.argv[1] ?? ""),
+  })
     .then((code) => {
       // Set exitCode rather than calling process.exit(), which can truncate
       // async stdout/file writes on large results. Let the event loop drain.
